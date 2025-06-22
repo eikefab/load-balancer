@@ -1,7 +1,12 @@
 package br.edu.ifal.redes.loadbalancer.server;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.net.Socket;
 
@@ -18,52 +23,94 @@ public class SocketHandler extends Thread {
     }
 
     @Override
-    public void start() {
-        try (
-                PrintWriter writer = new PrintWriter(client.getOutputStream());
-                BufferedReader reader = new BufferedReader(new InputStreamReader(client.getInputStream()))
-        ) {
+    public void start() { 
+        try {
+            InputStream clientInputStream = client.getInputStream();
+            OutputStream clientOutputStream = client.getOutputStream();
+
             System.out
-                    .format(
-                            "[INFO] Nova conexão recebida: %s:%s",
-                            client.getInetAddress().getHostAddress(),
-                            client.getPort()
-                    ).println();
+                .format(
+                    "[INFO] Nova conexão recebida: %s:%s",
+                    client.getInetAddress().getHostAddress(),
+                    client.getPort()
+                ).println();
 
-            final String line = reader.readLine();
+            // 1. Ler a primeira linha (ou um pedaço inicial) para identificar o tipo de requisição.
+            // Vamos ler linha por linha para identificar o comando de registro ou a primeira linha HTTP.
+            BufferedReader initialReader = new BufferedReader(new InputStreamReader(clientInputStream));
+            initialReader.mark(8192); // Marca o stream para poder resetar/reler
 
-            if (line == null || !line.equals("lb/connect-server")) {
-                final ServerNode node = Server.NODES.next();
+            String firstLine = initialReader.readLine();
 
-                if (node == null) {
-                    System.out.println("[INFO] Utilizando servidor padrão.");
+            if (firstLine != null && firstLine.equals("lb/connect-server")) {
+                // É um comando de registro de servidor.
+                // As próximas duas linhas contêm host e porta.
+                final String host = initialReader.readLine();
+                final String port = initialReader.readLine();
 
-                    sendDefaultResponse(writer);
+                final ServerNode node = new ServerNode(host, Integer.parseInt(port));
 
-                    return;
+                if (!Server.NODES.contains(node)) {
+                    Server.NODES.add(node);
                 }
 
-                System.out.format("[INFO] [FORWARD] Enviando dados para o servidor na porta " + node.getPort()).println();
-                node.forward(client);
+                System.out.format("[INFO] Novo servidor adicionado ao pool: %s:%s (Quantidade: %d)%n", host, port, Server.NODES.size());
+                PrintWriter writer = new PrintWriter(clientOutputStream);
+                writer.printf("[LOAD-BALANCER] Servidor adicionado com sucesso: %s:%s%n", host, port);
+                writer.flush();
 
-                return;
+            } else {
+                // É uma requisição de CLIENTE (presumimos HTTP).
+                // Agora, precisamos ler o RESTO da requisição HTTP (cabeçalhos e corpo, se houver).
+                // Como o `firstLine` já foi lido, precisamos combiná-lo de volta no stream.
+                
+                ByteArrayOutputStream fullRequestBytes = new ByteArrayOutputStream();
+                if (firstLine != null) {
+                    fullRequestBytes.write(firstLine.getBytes("UTF-8"));
+                    fullRequestBytes.write("\r\n".getBytes("UTF-8")); // Adiciona quebra de linha
+                }
+
+                // Lê o restante dos cabeçalhos HTTP até a linha vazia
+                String headerLine;
+                // IMPORTANTE: initialReader já está lendo do clientInputStream.
+                // Continuamos usando initialReader para ler o restante dos cabeçalhos.
+                while ((headerLine = initialReader.readLine()) != null && !headerLine.isEmpty()) {
+                    fullRequestBytes.write(headerLine.getBytes("UTF-8"));
+                    fullRequestBytes.write("\r\n".getBytes("UTF-8"));
+                }
+                fullRequestBytes.write("\r\n".getBytes("UTF-8")); // Linha vazia final dos cabeçalhos
+
+                // Agora, se houver um Content-Length para POST/PUT, você leria o corpo aqui.
+                // Para GET, o fluxo de requisição já terminou.
+
+                // Cria um InputStream a partir dos bytes lidos da requisição completa.
+                InputStream requestToForward = new ByteArrayInputStream(fullRequestBytes.toByteArray());
+
+
+                final ServerNode node = Server.NODES.next(); // Pega o PRÓXIMO nó na lista circular
+
+                if (node == null) {
+                    System.out.println("[INFO] Utilizando servidor padrão (nenhum nó disponível).");
+                    PrintWriter writer = new PrintWriter(clientOutputStream);
+                    sendDefaultResponse(writer);
+                    writer.flush();
+                } else {
+                    System.out.format("[INFO] [FORWARD] Enviando dados para o servidor na porta %d%n", node.getPort());
+                    // Chama o novo método forward do ServerNode, passando os streams.
+                    node.forward(requestToForward, clientOutputStream);
+                }
             }
-
-            final String host = reader.readLine();
-            final String port = reader.readLine();
-
-            final ServerNode node = new ServerNode(host, Integer.parseInt(port));
-
-            if (!Server.NODES.contains(node)) {
-                Server.NODES.add(node);
-            }
-
-            System.out.format("[INFO] Novo servidor adicionado ao pool: %s:%s (Quantidade: %d)", host, port, Server.NODES.size()).println();
-            writer.printf("[LOAD-BALANCER] Servidor adicionado com sucesso: %s:%s", host, port);
-
-            writer.flush();
         } catch (Exception exception) {
-            exception.printStackTrace();
+            System.err.println("[ERROR] Erro no SocketHandler: " + exception.getMessage());
+            exception.printStackTrace(); // Log detalhado para depuração
+        } finally {
+            try {
+                if (client != null && !client.isClosed()) {
+                    client.close(); // Garante que o socket do cliente seja fechado
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
