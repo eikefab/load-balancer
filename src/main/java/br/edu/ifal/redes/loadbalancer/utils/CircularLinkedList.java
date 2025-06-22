@@ -1,36 +1,42 @@
 package br.edu.ifal.redes.loadbalancer.utils;
 
+import java.util.Collections;
 import java.util.LinkedList;
+import java.util.List;
 
 public class CircularLinkedList<T> {
 
     private final LinkedList<T> list = new LinkedList<>();
 
-    public void add(T item) {
-        list.add(item);
+    // TODOS estes métodos devem ser synchronized
+    public synchronized void add(T item) {
+        if (!list.contains(item)) {
+            list.add(item);
+        }
     }
 
-    public boolean contains(T item) {
+    public synchronized boolean contains(T item) {
         return list.contains(item);
     }
 
-    public void remove(T item) {
+    public synchronized void remove(T item) {
         list.remove(item);
     }
 
-    public int size() {
+    public synchronized int size() {
         return list.size();
     }
 
-    public T next() {
+    public synchronized T next() { 
         if (list.isEmpty()) {
             return null;
         }
-
         final T item = list.removeFirst();
         list.addLast(item);
-
         return item;
     }
 
+    public synchronized List<T> getList() { // Retorna uma cópia para iteração segura
+        return Collections.unmodifiableList(new LinkedList<>(list)); 
+    }
 }
