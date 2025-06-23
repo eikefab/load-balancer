@@ -1,10 +1,10 @@
 package br.edu.ifal.redes.loadbalancer.server;
 
-import br.edu.ifal.redes.loadbalancer.utils.CircularLinkedList;
-
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
+
+import br.edu.ifal.redes.loadbalancer.utils.CircularLinkedList;
 
 public class Server {
 
@@ -16,6 +16,7 @@ public class Server {
 
     public Server() throws IOException {
         this.server = new ServerSocket(PORT);
+        new HealthChecker().start();
     }
 
     public void lockThreadAndStart() {
